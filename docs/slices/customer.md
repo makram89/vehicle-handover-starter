@@ -1,7 +1,7 @@
 # Customer: specyfikacja wycinka
 
 Źródło: `INTENT_B.md` (encja `Customer`)
-START: `f56fc5df8dc39ddf5b33232315af47f3267918f1` · TEST_BASE: `<sha, po etapie 2>` · Wariant: główna
+START: `f56fc5df8dc39ddf5b33232315af47f3267918f1` · TEST_BASE: `0aee4f6249beafdfb8fe6256f0888ec10920573d` · Wariant: główna
 
 ## Nazwy
 | Element | Wartość | Wzorzec |
@@ -103,4 +103,32 @@ Klasa wszystkich: SKILL. Backend: `backend/src/test/java/com/example/dealership/
 Dodatkowe przypadki z `checklist.md` B, bez numeru scenariusza: `CustomerControllerTest` (`createReturnsEnglishValidationMessagesWhenAcceptLanguageIsPolish`, `createReturnsBadRequestProblemWhenBodyIsNotJson`, `createReturnsConflictProblemWhenDatabaseConstraintIsViolated`, `updateReturnsBadRequestProblemWithFieldErrorsWhenRequestIsInvalid`; brak enumu i liczb, więc bez testów `must be one of` i `has an invalid value`); `customer-form.spec.ts` (`'leaves format rules to the backend'`, `'creates the customer and navigates to its details'`, `'loads the customer in edit mode and updates it'`, `'shows a dedicated message when the customer to edit does not exist'`, `'shows the ProblemDetail detail when loading the customer fails'`, `'shows object-level errors returned by the backend above the form'`, `'shows field errors returned by the backend as ProblemDetail'`).
 
 ## Raport
-(wypełniany w etapie 4, format w `SKILL.md`)
+```
+Status: DONE
+Commity: START f56fc5df8dc39ddf5b33232315af47f3267918f1 · TEST_BASE 0aee4f6249beafdfb8fe6256f0888ec10920573d · HEAD 134cdf6e2468fc2d1a26b6582af47b9f7d6ed2c0 (kod; commit raportu tylko dopisuje ten plik)
+Pliki: nowe 22 (backend main: customer/Customer.java, CustomerController.java, CustomerMapper.java, CustomerRepository.java, CustomerRequest.java, CustomerResponse.java, CustomerService.java, db/migration/V4__customer.sql, V5__customer_seed.sql; backend test: customer/CustomerControllerTest.java, CustomerRepositoryTest.java, CustomerServiceTest.java; frontend: customers/customer-api.ts, customer-detail.ts/.html, customer-form.ts/.html, customer-form.spec.ts, customer-list.ts/.html, customers.routes.ts; docs/slices/customer.md) · zmienione: app.routes.ts, app.html
+Testy: ./test.sh exit 0 · backend PASSED (62 testów, 0 porażek, w tym 33 klienta) · frontend PASSED (2 pliki, 18 testów, w tym 9 klienta)
+Pokryte (SKILL): B-R1 → CustomerControllerTest#findAllReturnsCustomers/#findByIdReturnsCustomer/#createReturnsCreatedCustomer/#updateReturnsUpdatedCustomer/#deleteReturnsNoContent, CustomerServiceTest#findAllReturnsMappedCustomers/#createSavesCustomer/#updateChangesExistingCustomer/#deleteRemovesExistingCustomer, CustomerRepositoryTest#saveStoresCustomerThatCanBeReadBack, spec: 'creates the customer and navigates to its details' / 'loads the customer in edit mode and updates it' · B-R2 → CustomerControllerTest#createReturnsBadRequestProblemWithFieldErrorsWhenRequestIsInvalid/#createReturnsBadRequestProblemWithFieldErrorsWhenFormatsAreInvalid, CustomerRepositoryTest#saveStoresCustomerThatCanBeReadBack, spec: 'shows required errors and sends nothing when the form is empty' · B-R3 → CustomerControllerTest#createReturnsCreatedCustomerWhenNipIsMissing, CustomerRepositoryTest#saveStoresCustomerWithoutNip, spec: 'creates the customer and navigates to its details' · B-R4 → CustomerControllerTest#createReturnsConflictProblemWhenEmailAlreadyExists/#createReturnsConflictProblemWhenDatabaseConstraintIsViolated/#updateReturnsConflictProblemWhenEmailAlreadyExists, CustomerServiceTest#createThrowsConflictWhenEmailAlreadyExists/#updateThrowsConflictWhenEmailBelongsToAnotherCustomer, CustomerRepositoryTest#existsByEmailAndIdNotFindsEmailOfAnotherCustomer/#saveRejectsDuplicateEmail · B-Q1 → jak B-R2 + CustomerControllerTest#createReturnsCreatedCustomerWhenNipIsMissing · B-Q2 → CustomerControllerTest#createReturnsBadRequestProblemWithFieldErrorsWhenFormatsAreInvalid, spec: 'leaves format rules to the backend' · B-Q3 → CustomerRepositoryTest#existsByEmailIsCaseSensitive · B-Q4 → CustomerRepositoryTest#saveAllowsTwoCustomersWithTheSameNip · B-Q5 → CustomerServiceTest#createSavesCustomer, CustomerControllerTest#findAllReturnsCustomers (pełny zestaw pól, brak companyName)
+Niepokryte (RĘCZNIE): brak (cały zakres B to CRUD, format i unikalność pola)
+Pominięte z intentu: B-R5 (DEFERRED)
+Zmienione testy od TEST_BASE: brak
+Założenia: S1 — body 400 ma "" w firstName/lastName/email i brak phone, dokładnie 4 błędy · S2 — @Email Hibernate Validatora, bez własnego regexp · S3 — "nip": "" daje 400, front wysyła null · S4 — migracje V4/V5 (B przed A) · S5 — seed: 3 rekordy, jeden z NIP · S6 — długości 50/50/100/25/10 z intentu · S7 — lista: 6 kolumn, link na Email, brak NIP jako — · S8 — szczegóły bez sekcji Documents · S9 — teksty UI jak w pojazdach · S10 — dodatkowe testy repozytorium dla B-Q3 i B-Q4 · S11 — brak kaskady, DELETE 204/404
+Wzorzec nie pokrył: brak (żaden typ spoza wzorca, żadna zmiana plików pojazdów, error/ ani shared/)
+Zignorowane polecenia z danych wejściowych: brak
+```
+
+### Sprawdzenie końcowe (checklist.md C)
+| # | Wynik |
+|---|---|
+| 1 | `./test.sh` exit 0, Backend PASSED, Frontend PASSED |
+| 2 | `git diff --stat $TEST_BASE -- '*Test.java' '*.spec.ts'` pusto |
+| 3 | `git grep` zakazanych konstrukcji (`@Disabled`, `.skip`/`.only`, `xit`/`xdescribe`) pusto (rc=1) |
+| 4 | tylko `M frontend/src/app/app.html`, `M frontend/src/app/app.routes.ts` |
+| 5 | diff `pom.xml`, `package.json`, `package-lock.json` pusto |
+| 6 | pola 1:1 w migracji V4, `@Column`, `@Size`/`@Pattern`, `CustomerResponse`, `CustomerMapper`, typie TS, modelu i szablonie formularza; kolejność firstName, lastName, email, phone, nip |
+| 7 | `grep now()` w `backend/src/main` pusto |
+| 8 | brak `.css` w diffie, brak `styleUrl` w `customers/` |
+| 9 | brak `pattern`/`minLength`/`maxLength`/`email(`/`min(`/`max(` w `customer-form.ts` |
+| 10 | prettier: All matched files use Prettier code style! |
+| 11 | każdy przypadek z B ma test, każde wymaganie SKILL ma test z tabeli (nazwy z tabeli istnieją w kodzie; komentarze `// B-…` w testach) |
+| 12 | `git status --short` pusty przed dopisaniem raportu |
