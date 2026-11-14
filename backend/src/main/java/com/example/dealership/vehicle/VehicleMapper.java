@@ -32,6 +32,7 @@ public final class VehicleMapper {
                 vehicle.getModel(),
                 vehicle.getProductionYear(),
                 vehicle.getFuelType(),
-                vehicle.getPlannedHandoverDate());
+                vehicle.getPlannedHandoverDate(),
+                vehicle.isRegistrationByDealer());
     }
 }

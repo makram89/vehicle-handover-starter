@@ -51,6 +51,12 @@ public class VehicleController {
         return vehicleService.update(id, request);
     }
 
+    @PutMapping("/{id}/registration-by-dealer")
+    public VehicleResponse updateRegistrationByDealer(@PathVariable Long id,
+            @Valid @RequestBody RegistrationByDealerRequest request) {
+        return vehicleService.updateRegistrationByDealer(id, request);
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         vehicleService.delete(id);

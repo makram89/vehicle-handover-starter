@@ -37,6 +37,9 @@ public class Vehicle {
 
     private LocalDate plannedHandoverDate;
 
+    @Column(nullable = false)
+    private boolean registrationByDealer;
+
     protected Vehicle() {
     }
 
@@ -100,5 +103,13 @@ public class Vehicle {
 
     public void setPlannedHandoverDate(LocalDate plannedHandoverDate) {
         this.plannedHandoverDate = plannedHandoverDate;
+    }
+
+    public boolean isRegistrationByDealer() {
+        return registrationByDealer;
+    }
+
+    public void setRegistrationByDealer(boolean registrationByDealer) {
+        this.registrationByDealer = registrationByDealer;
     }
 }

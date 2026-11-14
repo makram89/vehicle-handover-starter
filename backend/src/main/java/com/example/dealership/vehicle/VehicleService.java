@@ -49,6 +49,13 @@ public class VehicleService {
     }
 
     @Transactional
+    public VehicleResponse updateRegistrationByDealer(Long id, RegistrationByDealerRequest request) {
+        Vehicle vehicle = getVehicle(id);
+        vehicle.setRegistrationByDealer(request.registrationByDealer());
+        return VehicleMapper.toResponse(vehicleRepository.save(vehicle));
+    }
+
+    @Transactional
     public void delete(Long id) {
         vehicleRepository.delete(getVehicle(id));
     }
