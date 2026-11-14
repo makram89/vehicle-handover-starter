@@ -22,7 +22,7 @@ Prosta kartoteka klientów salonu (dodawanie, lista, podgląd, edycja, usuwanie)
 | `firstName` | `String` / `VARCHAR(50) NOT NULL` | tak | `@NotBlank @Size(max = 50)` | B-R2, B-Q1 |
 | `lastName` | `String` / `VARCHAR(50) NOT NULL` | tak | `@NotBlank @Size(max = 50)` | B-R2, B-Q1 |
 | `email` | `String` / `VARCHAR(100) NOT NULL`, `CONSTRAINT uq_customer_email UNIQUE (email)` | tak, unikalny | `@NotBlank @Email @Size(max = 100)` | B-R4, B-Q3 |
-| `phone` | `String` / `VARCHAR(25) NOT NULL` | tak | `@NotBlank @Pattern(regexp = "\\+?[0-9 \\-]{9,20}", message = "must be 9 to 20 characters: digits, spaces, hyphens, optional leading +")` | B-R2, B-Q1, B-Q2 |
+| `phone` | `String` / `VARCHAR(25) NOT NULL` | tak | `@NotBlank @Pattern(regexp = "\\+?[0-9][0-9 \\-]{7,18}[0-9]", message = "must be 9 to 20 characters: digits, spaces, hyphens, optional leading +, starting and ending with a digit")` | B-R2, B-Q1, B-Q2 |
 | `nip` | `String` / `VARCHAR(10)` | nie | `@Pattern(regexp = "[0-9]{10}", message = "must be 10 digits")` | B-R3, B-Q2, B-Q4 |
 
 Frontend: etykiety `First name`, `Last name`, `Email`, `Phone`, `NIP`; `required` dla czterech pierwszych (`"First name is required"` itd.); pusty NIP → `null`.
@@ -66,7 +66,7 @@ Migracje: `V<n>__customer.sql` i `V<n+1>__customer_seed.sql` (2–3 rekordy, w t
 | # | Status | Pytanie do klienta | Założenie | Uzasadnienie | Jeśli klient zdecyduje inaczej |
 |---|---|---|---|---|---|
 | B-Q1 | ASSUMED | Które pola są obowiązkowe (L23 „imię, nazwisko, e-mail, telefon”)? | Wszystkie cztery wymagane, NIP opcjonalny | Anna wymienia je dla każdego klienta, a NIP tylko dla firm. Telefon będzie potrzebny do SMS (A-R15) | Zdjąć `@NotBlank`/`NOT NULL` z `phone` (nowa migracja) |
-| B-Q2 | ASSUMED | Jaki format telefonu i NIP? | Telefon: opcjonalny `+` na początku, potem 9–20 znaków: cyfry, spacje, myślniki (`+48 600 100 200` i `600-100-200` przechodzą). NIP: dokładnie 10 cyfr, bez sumy kontrolnej | Typowe zapisy numeru ze spacjami i myślnikami nie mogą dawać 400. Prosta reguła `@Pattern`, którą skill generuje | Normalizacja telefonu do samych cyfr w mapperze; walidator sumy kontrolnej NIP jak `ProductionYear` |
+| B-Q2 | ASSUMED | Jaki format telefonu i NIP? | Telefon: opcjonalny `+` na początku, potem 9–20 znaków: cyfry, spacje, myślniki, pierwszy i ostatni znak to cyfra (`+48 600 100 200` i `600-100-200` przechodzą, `+---------` daje 400). NIP: dokładnie 10 cyfr, bez sumy kontrolnej | Typowe zapisy numeru ze spacjami i myślnikami nie mogą dawać 400. Prosta reguła `@Pattern`, którą skill generuje | Normalizacja telefonu do samych cyfr w mapperze; walidator sumy kontrolnej NIP jak `ProductionYear` |
 | B-Q3 | ASSUMED | Czy `Jan@x.pl` i `jan@x.pl` to ten sam e-mail? | Porównanie dokładne, wielkość liter ma znaczenie | Zgodne z wzorcem VIN i constraintem `UNIQUE` | Zapisywać e-mail małymi literami w mapperze, `existsByEmailIgnoreCase` |
 | B-Q4 | ASSUMED | Czy NIP musi być unikalny? | Nie | L23 wymienia unikalność tylko dla e-maila. Kilka osób kontaktowych tej samej firmy ma ten sam NIP | `existsByNip` + `uq_customer_nip` |
 | B-Q5 | ASSUMED | Czy klient firmowy potrzebuje nazwy firmy albo pola typu klienta (osoba/firma)? | Nie: firma = klient z wypełnionym NIP | L23 wymienia tylko NIP | Pole `companyName` (opcjonalne) lub enum `CustomerType` |
