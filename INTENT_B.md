@@ -51,7 +51,7 @@ Migracje: `V<n>__customer.sql` i `V<n+1>__customer_seed.sql` (2–3 rekordy, w t
 | 2 | klient z `jan@example.com` | POST z tym samym e-mailem | 409 `application/problem+json`, `detail: Customer with email jan@example.com already exists` (B-R4) |
 | 3 | klient 1 z `jan@example.com` | PUT klienta 1 z tym samym e-mailem | 200 (własny e-mail nie jest konfliktem) |
 | 4 | klienci 1 i 2 | PUT klienta 2 z e-mailem klienta 1 | 409 (B-R4) |
-| 5 | — | POST z pustym `firstName`, `lastName`, `email`, `phone` | 400, 4 błędy po `field`: `email`, `firstName`, `lastName`, `phone`; serwis nie wywołany |
+| 5 | — | POST z `firstName`, `lastName`, `email` = `""` i bez `phone` (`null`) | 400, 4 błędy `must not be blank` po `field`: `email`, `firstName`, `lastName`, `phone`; serwis nie wywołany. Uwaga: `phone` = `""` daje dla `phone` dwa błędy (`@NotBlank` i `@Pattern`), razem 5 |
 | 6 | — | POST z `nip` = `123`, `phone` = `abc`, `email` = `x` | 400 z błędami pól `email`, `nip`, `phone` |
 | 7 | brak klienta 99 | GET / PUT / DELETE 99 | 404 `Customer with id 99 not found` |
 | 8 | klient 1 | DELETE 1 | 204, potem GET 1 → 404 |
