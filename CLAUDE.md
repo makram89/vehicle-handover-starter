@@ -47,7 +47,10 @@ Salon samochodowy: Spring Boot 3.5 (Java 21, Maven wrapper) + Angular 22 (signal
 - Niejasność nie jest powodem do zgadywania: zapisz założenie w `INTENT_<litera>.md` i działaj dalej. Wyjątek: skill `feature-slice` nie edytuje intentu, swoje założenia zapisuje w `docs/slices/<encja>.md`.
 
 ## Git
-- Liniowo na `main`, bez worktree, bez dodatkowych branchy, bez force-push. Małe commity, komunikaty po angielsku w trybie rozkazującym (`Add basic class-free styles`). Przed commitem `./test.sh`.
+- Jeden worktree i jedna gałąź na feature (`feat/<feature>`), tworzone z bieżącego HEAD lokalnego `main`, nie z `origin`. Po utworzeniu sprawdź, że `git log -1` w worktree = `git log -1 main`.
+- Małe commity w worktree, komunikaty po angielsku w trybie rozkazującym (`Add basic class-free styles`). Przed każdym commitem `./test.sh`. Tury testowe i poprawki zostają w tej samej gałęzi.
+- Po ukończeniu feature (testy zielone): w głównym checkoucie `git merge --ff-only feat/<feature>`, potem `git worktree remove <ścieżka>` i `git branch -d feat/<feature>`. Ten merge na `main` jest wprost dozwolony, nie pytaj o zgodę. Gdy `--ff-only` zawodzi, zatrzymaj się i zapytaj; bez merge commitów i bez rebase po cichu.
+- Nigdy force-push. Koniec pracy = `git worktree list` pokazuje tylko główny checkout, `git branch` tylko `main`.
 - Każdy krok kończy się commitem i czystym `git status`.
 
 ## Styl odpowiedzi
