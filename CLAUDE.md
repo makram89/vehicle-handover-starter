@@ -11,7 +11,7 @@ Salon samochodowy: Spring Boot 3.5 (Java 21, Maven wrapper) + Angular 22 (signal
 - Całość: `./test.sh` (zawsze oba człony; exit ≠ 0 przy porażce). Start: `./run.sh` (:8080 i :4200, `/api` przez proxy; baza odtwarzana z migracji przy każdym starcie).
 - Jedna klasa: `cd backend && ./mvnw test -Dtest=VehicleServiceTest`
 - Frontend: `cd frontend && npm test`; jeden spec: `npx ng test --watch=false --include src/app/vehicles/vehicle-form.spec.ts`
-- Node: 22.22.3+ lub 24.15+ (`.nvmrc`, `check-node.sh`). Angular CLI odmawia starszego, więc przed frontendem sprawdź `node -v`, a nie zakładaj, że PATH wskazuje właściwą wersję.
+- Node: 22.22.3+ lub 24.15+ (`.nvmrc`, `check-node.sh`). Angular CLI odmawia starszego; `check-node.sh` (z `test.sh`/`run.sh`) sam przełącza przez nvm wg `.nvmrc`. Przy ręcznym `npm`/`ng` poza skryptami sprawdź `node -v` albo najpierw `source check-node.sh`. Exit 1 z `test.sh` z komunikatem „Node.js … is not supported" to środowisko, nie test.
 
 ## Backend (`com.example.dealership.<feature>`)
 - Pakiet per feature: encja, `*Controller`, `*Service`, `*Repository`, `*Mapper`, `*Request`/`*Response` jako rekordy. Bez Lombok i MapStruct.

@@ -25,6 +25,10 @@ Skill wygenerował całość: migracje z seedem, pakiet `customer/`, 33 testy ba
 
 Nie było przypadku, w którym wygenerowany kod trzeba było cofać.
 
+## Problemy środowiskowe
+
+- **Zła wersja Node w `./test.sh`:** domyślny `node` w PATH to 24.0.1, a Angular CLI wymaga 24.15+ (`.nvmrc`). Skrypty chodzą w niinteraktywnym shellu bez nvm, więc `check-node.sh` odrzucał Node i `./test.sh` kończył się exit 1, co agent mylnie czytał jako porażkę testów i tracił czas na diagnozę. Naprawa: `check-node.sh` sam ładuje nvm i robi `nvm use` wg `.nvmrc`, gdy bieżący Node jest za stary. Komunikat błędu zostaje, gdy nvm nie ma.
+
 ## Decyzje projektowe (zbiorczo)
 
 - **Intent ponad zgadywanie:** niejasności zapisywane jako założenia z uzasadnieniem i informacją, co zmienić, gdy klient zdecyduje inaczej. Przy konflikcie w kliencie wygrywa Anna, a spór o odrzucone dokumenty (`A-Q1`) zostaje otwarty do decyzji dyrektora.
