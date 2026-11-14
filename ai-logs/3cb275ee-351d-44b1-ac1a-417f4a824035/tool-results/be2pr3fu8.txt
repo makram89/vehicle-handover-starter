@@ -1,0 +1,337 @@
+18cd001 docs(vehicle-document): Add vehicle-document slice report
+393e80b feat(vehicle-document): Add vehicle-document frontend
+9ce4244 feat(vehicle-document): Add vehicle-document backend
+# A: Dokumenty pojazdu i gotowość do wydania
+
+Cytaty: `docs/transcript.md` (`L<n>`). Kontrakt: sekcja *Kontrakt API* w `BRIEF.md`. Klient: Anna (decyduje), Tomek; dostawca: Kasia.
+
+## 1. Cel
+Zastąpić papierową checklistę (L2): salon wpisuje dokumenty auta i je weryfikuje, a system sam mówi, czy auto jest gotowe do wydania i czego brakuje.
+
+## 2. Wymagania
+| ID | Treść | Status | Źródło |
+|---|---|---|---|
+| A-R1 | Każde auto wymaga `SALES_AGREEMENT`, `INVOICE`, `COC`, `OC_POLICY` | CONFIRMED | L4 „Bez tych czterech auto nie wyjeżdża.” |
+| A-R2 | `REGISTRATION_POA` jest wymagane tylko, gdy salon rejestruje auto za klienta | CONFIRMED | L4 „potrzebne tylko wtedy, kiedy to my rejestrujemy auto za klienta” |
+| A-R3 | Flaga przy aucie *salon rejestruje* (`registrationByDealer`), ustawiana ręcznie, domyślnie `false` | CONFIRMED | L9 „Domyślnie klient rejestruje sam” |
+| A-R4 | Nowy dokument ma status `PENDING` | CONFIRMED | L11 „dokument czeka na weryfikację” |
+| A-R5 | Weryfikacja: `PENDING` → `VERIFIED` albo `REJECTED` | CONFIRMED | L11 „jest albo zweryfikowany, albo odrzucony” |
+| A-R6 | Po poprawce przestawić `REJECTED` → `VERIFIED` | SUPERSEDED by A-R7 | L12 „przestawiamy status na zweryfikowany” |
+| A-R7 | `REJECTED` jest stanem końcowym, poprawka = nowy dokument (decyzja tymczasowa, A-Q1) | CONFIRMED | L26 „odrzucony zostaje odrzucony, a poprawka to nowy dokument” |
+| A-R8 | `expiryDate` opcjonalna, umowa i faktura jej nie mają | CONFIRMED | L14 „Umowa i faktura nie mają.” |
+| A-R9 | Dokument musi być ważny w dniu wydania, włącznie z tym dniem | CONFIRMED | L14 „ten dzień się jeszcze liczy” |
+| A-R10 | `issueDate` nie może być z przyszłości (dziś jest dozwolone) | CONFIRMED | L16 „Nie może być z przyszłości.” |
+| A-R11 | Najwyżej jeden aktywny (nie `REJECTED`) dokument danego typu na auto; odrzucone zostają w historii | CONFIRMED | L18 „Odrzucone mogą wisieć w historii, ale aktywny tylko jeden.” |
+| A-R12 | Odrzucony dokument liczy się jak brak dokumentu | CONFIRMED | L18 „Odrzucony to tak, jakby dokumentu nie było” |
+| A-R13 | W aucie widać gotowość do wydania i listę braków | CONFIRMED | L19 „gotowe do wydania albo czego brakuje” |
+| A-R14 | Bez ustalonej daty wydania (`plannedHandoverDate`) auto nie jest gotowe | CONFIRMED | L20 „nie może pokazywać, że gotowe” |
+
+## 3. Model danych
+**`VehicleDocument`**, tabela `vehicle_document` (A-R4…A-R11, kontrakt):
+
+| Pole | Java / SQL | Wymagane | Walidacja / uwagi |
+|---|---|---|---|
+| `id` | `Long` / `BIGINT IDENTITY` | auto | |
+| `vehicleId` | `Long` / `BIGINT NOT NULL`, FK `vehicle(id) ON DELETE CASCADE` | z URL, nie z body | A-Q12 |
+| `type` | `DocumentType` / `VARCHAR(20) NOT NULL` | tak | `@NotNull` |
+| `number` | `String` / `VARCHAR(50) NOT NULL` | tak | `@NotBlank @Size(max = 50)`, A-Q11 |
+| `issueDate` | `LocalDate` / `DATE NOT NULL` | tak | `@NotNull`, ≤ dziś z `Clock`: `must not be in the future` (A-R10) |
+| `expiryDate` | `LocalDate` / `DATE` | nie | ≥ `issueDate`: `must not be before issue date` (A-Q10) |
+| `status` | `DocumentStatus` / `VARCHAR(20) NOT NULL` | serwer | POST zawsze `PENDING`, pola nie ma w body (A-R4) | Bez `UNIQUE` w bazie (odrzucone się powtarzają), unikalność aktywnego sprawdza serwis (A-R11).
+
+**Enumy** (kolejność deklaracji = kolejność w odpowiedzi gotowości): `DocumentType`: `SALES_AGREEMENT`, `INVOICE`, `COC`, `OC_POLICY`, `REGISTRATION_POA`. `DocumentStatus`: `PENDING`, `VERIFIED`, `REJECTED`. `ReadinessReason`: `NOT_VERIFIED`, `EXPIRED`, `NO_HANDOVER_DATE`.
+
+**Rekordy:** `DocumentRequest(type, number, issueDate, expiryDate)`, `DocumentStatusRequest(@NotNull status)`, `DocumentResponse(id, vehicleId, type, number, issueDate, expiryDate, status)`, `HandoverReadinessResponse(boolean ready, List<DocumentType> missingDocumentTypes, List<ReadinessProblem> problems)`, `ReadinessProblem(DocumentType documentType /* null przy NO_HANDOVER_DATE */, ReadinessReason reason)`. Kształt dokładnie jak w kontrakcie, bez dodatkowych pól.
+
+**Zmiana `Vehicle`** (A-R3, A-Q7): `registrationByDealer`: `boolean` / `BOOLEAN NOT NULL DEFAULT FALSE` (nowa migracja). Pole jest w `VehicleResponse`, nie ma go w `VehicleRequest`. `plannedHandoverDate` (już istnieje) = data wydania.
+
+**Endpointy** (404: `Vehicle with id 99 not found`, `Document with id 5 not found`, także gdy dokument należy do innego auta):
+
+| Metoda i ścieżka | Sukces | Błędy |
+|---|---|---|
+| `GET /api/vehicles/{vehicleId}/documents` | 200, sortowanie po `id` | 404 |
+| `GET /api/vehicles/{vehicleId}/documents/{documentId}` (konwencja, cel `Location`) | 200 | 404 |
+| `POST /api/vehicles/{vehicleId}/documents` | 201 + `Location` | 400, 404, 409 `Vehicle with id 1 already has an active INVOICE document` |
+| `PUT /api/vehicles/{vehicleId}/documents/{documentId}/status` | 200 `DocumentResponse` | 400, 404, 409 `Cannot change document status from REJECTED to VERIFIED` |
+| `GET /api/vehicles/{vehicleId}/handover-readiness` | 200 | 404 |
+| `PUT /api/vehicles/{vehicleId}/registration-by-dealer` body `{"registrationByDealer": true}` | 200 `VehicleResponse` | 400 (`@NotNull`), 404 |
+
+## 4. Reguły biznesowe
+**Przejścia statusu** (`PUT …/status`; wiersz = obecny status, kolumna = docelowy):
+
+| Z \ Na | `PENDING` | `VERIFIED` | `REJECTED` |
+|---|---|---|---|
+| `PENDING` | 409 | 200 (A-R5) | 200 (A-R5) |
+| `VERIFIED` | 409 | 409 | 200 (A-Q3) |
+| `REJECTED` | 409 | 409 (A-R7) | 409 (A-R7) |
+
+**Dodanie** (`POST`): 409, gdy auto ma już dokument tego `type` w statusie `PENDING` lub `VERIFIED` (A-R11). Odrzucony nie blokuje (A-R12).
+
+**Gotowość** (`GET handover-readiness`):
+1. `required` = A-R1 + `REGISTRATION_POA`, gdy `registrationByDealer` (A-R2). Pozostałe typy są pomijane (A-Q8).
+2. `refDate` = `plannedHandoverDate`, a gdy jej brak: dziś z `Clock` (A-R9, A-Q4, A-Q13).
+3. Dla każdego typu z `required` w kolejności enumu wybierz dokument aktywny (nie `REJECTED`):
+   brak → `missingDocumentTypes` += typ; status `PENDING` → problem `(typ, NOT_VERIFIED)`; `expiryDate != null && expiryDate < refDate` → problem `(typ, EXPIRED)`, po `NOT_VERIFIED`.
+4. `plannedHandoverDate == null` → problem `(null, NO_HANDOVER_DATE)` na końcu listy (A-R14).
+5. `ready = missingDocumentTypes.isEmpty() && problems.isEmpty()`.
+
+## 5. Kryteria akceptacji
+Dziś (`Clock`) = 2026-11-14; *auto X* ma `plannedHandoverDate` 2026-12-15 i `registrationByDealer = false`, chyba że podano inaczej.
+
+| # | Dado | Kiedy | Wtedy |
+|---|---|---|---|
+| 1 | auto X bez dokumentów | GET readiness | `ready=false`, `missing=[SALES_AGREEMENT, INVOICE, COC, OC_POLICY]`, `problems=[]` (A-R1) |
+| 2 | j.w., `registrationByDealer=true` | GET readiness | `missing` kończy się `REGISTRATION_POA` (A-R2) |
+| 3 | nowe auto | PUT `registration-by-dealer` `true`, potem GET auta | `registrationByDealer=true`; nowe auto ma `false` (A-R3) |
+| 4 | auto X | POST `INVOICE`, `issueDate` 2026-11-14 | 201, `status=PENDING`, `Location` (A-R4, A-R10 granica) |
+| 5 | auto X | POST z `issueDate` 2026-11-15 | 400, `errors[0].field=issueDate` (A-R10) |
+| 6 | dokument `PENDING` | PUT `VERIFIED` / PUT `REJECTED` | 200 z nowym statusem (A-R5) |
+| 7 | dokument `REJECTED` | PUT `VERIFIED` | 409, status bez zmian (A-R7) |
+| 8 | dokument `VERIFIED` | PUT `PENDING`; PUT `VERIFIED`; PUT `REJECTED` | 409; 409; 200 (A-Q3) |
+| 9 | aktywny `INVOICE` (`PENDING` lub `VERIFIED`) | POST `INVOICE` | 409 (A-R11) |
+| 10 | tylko odrzucony `INVOICE` | POST `INVOICE`, potem GET listy | 201; lista zawiera oba dokumenty (A-R11) |
+| 11 | 4 typy `VERIFIED`, ale `COC` `REJECTED` | GET readiness | `missing=[COC]` (A-R12) |
+| 12 | komplet `VERIFIED`, `OC_POLICY.expiryDate` = 2026-12-15 | GET readiness | `ready=true`, `missing=[]`, `problems=[]` (A-R9 granica) |
+| 13 | j.w., `expiryDate` 2026-12-14 | GET readiness | `problems=[{OC_POLICY, EXPIRED}]` (A-R9) |
+| 14 | komplet `VERIFIED`, `INVOICE` bez `expiryDate` | GET readiness | brak `EXPIRED` dla `INVOICE` (A-R8) |
+| 15 | komplet, `INVOICE` `PENDING` | GET readiness | `problems=[{INVOICE, NOT_VERIFIED}]` (A-Q2) |
+| 16 | komplet `VERIFIED`, brak `plannedHandoverDate`, `OC_POLICY.expiryDate` 2026-11-13 | GET readiness | `problems=[{OC_POLICY, EXPIRED}, {null, NO_HANDOVER_DATE}]`, `ready=false` (A-R14, A-Q4) |
+| 17 | flaga `false`, `REGISTRATION_POA` `PENDING` i przeterminowany | GET readiness | POA nie pojawia się w odpowiedzi (A-Q8) |
+| 18 | auto X | POST z `expiryDate` < `issueDate` | 400, `field=expiryDate` (A-Q10) |
+| 19 | auto 99 nie istnieje | dowolny endpoint z §3 | 404 `Vehicle with id 99 not found` |
+
+## 6. Poza zakresem
+| ID | Co | Status | Źródło |
+|---|---|---|---|
+| A-R15 | SMS do klienta, gdy auto jest gotowe (zgłosił Tomek w L21, przesunięte przez dostawcę) | DEFERRED | L22 „zostawiamy je na kolejny etap” |
+
+## 7. Pytania i założenia
+| # | Status | Pytanie do klienta | Założenie | Uzasadnienie | Jeśli klient zdecyduje inaczej |
+|---|---|---|---|---|---|
+| A-Q1 | OPEN | Konflikt: Tomek chce przestawiać odrzucony na zweryfikowany (L25 „zawsze robiliśmy tak, że przestawiamy status”), Anna: L24 „Odrzucony dokument zostaje odrzucony.” Co postanowi dyrektor? | Wersja Anny (A-R7) | Anna decyduje do czasu rozmowy z dyrektorem (L26 „Na razie róbcie po mojemu”); kontrakt (*aktywny (nieodrzucony)*) jest z tym zgodny | Dopuścić `REJECTED → VERIFIED`, gdy brak innego aktywnego dokumentu tego typu. **Ryzyko testów:** jeśli oceniający oczekują 200, dostaną 409 |
+| A-Q2 | ASSUMED | Czy niezweryfikowany dokument blokuje wydanie? | Tak, `NOT_VERIFIED`. Ważność sprawdzamy także dla `PENDING`, więc ten sam dokument może dać jednocześnie `NOT_VERIFIED` i `EXPIRED` (§4 pkt 3) | Kontrakt ma ten powód, a L11 opisuje weryfikację jako obowiązkowy krok | Pominąć `PENDING` w problemach |
+| A-Q3 | ASSUMED | Czy zweryfikowany dokument można później odrzucić? Czy da się wrócić do `PENDING`? | `VERIFIED → REJECTED` tak; powrót do `PENDING` i zmiana na ten sam status: 409 | Bez tego błędnie zweryfikowanego dokumentu nie da się zastąpić, bo A-R11 blokuje nowy | Zablokować `VERIFIED → REJECTED` (zmiana jednej komórki tabeli). **Ryzyko testów:** inna macierz 409 |
+| A-Q4 | ASSUMED | Jak oceniać ważność, gdy nie ma daty wydania? | Na dziś (`Clock`) | Przykład z kontraktu pokazuje `EXPIRED` razem z `NO_HANDOVER_DATE` | Pomijać `EXPIRED` bez daty wydania. **Ryzyko testów:** przykład z kontraktu |
+| A-Q5 | ASSUMED | Czy system ma przechowywać skany (L11 „Jak ktoś wgra skan”)? | Nie, tylko metadane | Kontrakt nie ma pola pliku | Osobny endpoint uploadu i storage |
+| A-Q6 | ASSUMED | Czy zapisywać, kto zweryfikował lub odrzucił dokument i dlaczego (L11 „Ja albo Tomek sprawdzamy”, L24 „przy kontroli nie widać, co było źle”)? | Nie: bez logowania, ról i komentarza | Body statusu w kontrakcie ma tylko `status` | Opcjonalne `comment` w `DocumentStatusRequest` i `statusChangedAt` z `Clock` |
+| A-Q7 | ASSUMED | Czy flagę rejestracji można zmieniać w dowolnym momencie (L9 „Tomek może to zaznaczać przy aucie”)? | Tak, osobnym `PUT …/registration-by-dealer` | Zamrożone `vehicle-form.spec.ts:107` i `VehicleControllerTest` sprawdzają dokładne body i liczbę błędów pojazdu. PUT pojazdu bez flagi by ją zerował | Pole w formularzu pojazdu wymaga zmiany zamrożonych testów (zgoda prowadzącego) |
+| A-Q8 | ASSUMED | Czy pełnomocnictwo dodane przy aucie bez flagi ma wpływ na gotowość? | Nie, jest ignorowane | L9 „wymagane tylko przy autach, gdzie Tomek to zaznaczy” | Raportować jego problemy |
+| A-Q9 | ASSUMED | Czy polisa i pełnomocnictwo muszą mieć datę ważności (L14 „Polisa ma, pełnomocnictwo zwykle też.”)? | Nie wymuszamy; brak daty = ważny bezterminowo | Kontrakt: *opcjonalnie `expiryDate`*. Wymuszenie dałoby 400 tam, gdzie testy mogą oczekiwać 201 | `@NotNull` warunkowe dla `OC_POLICY` (400 `expiryDate`) |
+| A-Q10 | ASSUMED | Czy data ważności może być wcześniejsza niż wystawienia? | Nie, 400 | Oczywisty błąd wpisu, analogicznie do L16 | Usunąć walidator |
+| A-Q11 | ASSUMED | Co to jest `number` i czy musi być unikalny? | Wymagany tekst do 50 znaków, bez unikalności | Kontrakt nie oznacza go jako opcjonalnego; transkrypcja milczy | Dodać `@Pattern` lub unikalność per typ |
+| A-Q12 | ASSUMED | Co z dokumentami po usunięciu auta? Czy dokument można edytować lub usunąć? | Kaskadowe usunięcie z autem; brak edycji i usuwania dokumentu | Usuwanie pojazdu nadal daje 204. Historia służy kontroli (L24) | FK bez kaskady → 409 przy usuwaniu auta z dokumentami |
+| A-Q13 | ASSUMED | Czy auto z datą wydania w przeszłości może być gotowe? | Tak, liczymy względem `plannedHandoverDate` | Kontrakt nie ma takiego powodu | Nowy `reason` (zmiana kontraktu) |
+
+## 8. Zadania techniczne
+- Bean `Clock` (nie istnieje). `@NotInFuture` z wstrzykniętym `Clock`. Walidator klasowy `expiryDate ≥ issueDate` z `addPropertyNode("expiryDate")`, żeby błąd miał `field`.
+- Zamrożone testy: zachować 6-argumentowe konstruktory `Vehicle`/`VehicleRequest` i 7-argumentowy `VehicleResponse` (dodatkowy konstruktor rekordu). Flagi nie dodawać do frontendowych `Vehicle`/`VehicleRequest`; dokumenty mają własny typ.
+- UI w szczegółach auta: blok gotowości (z backendu, bez liczenia na froncie), lista dokumentów, formularz dodania, przyciski statusu, checkbox flagi. Migracje po B. Wyścig dwóch POST tego samego typu nie ma siatki w bazie: akceptujemy.
+# VehicleDocument: specyfikacja wycinka
+
+Źródło: `INTENT_A.md` (encja `VehicleDocument`) + kontrakt API z `BRIEF.md` (podany w zleceniu)
+START: `781f511a719dffc0c35023cc7beebea96ebfdb56` · TEST_BASE: `3f0f715b7cc4583dc8f1a581757b74ee959de5ff` · Wariant: podrzędna pod `Vehicle`
+
+Zakres wycinka: lista, `GET /{id}`, dodanie (POST), 400 formatu, 404. Reszta intentu A jest `RĘCZNIE` (patrz „Wymagania”).
+
+## Nazwy
+| Element | Wartość | Wzorzec |
+|---|---|---|
+| Klasa / pakiet | `VehicleDocument` / `com.example.dealership.document` (`VehicleDocumentController`, `VehicleDocumentService`, `VehicleDocumentRepository`, `VehicleDocumentMapper`, enumy `DocumentType`, `DocumentStatus`, rekordy `DocumentRequest`, `DocumentResponse`) | `Vehicle` / `...vehicle` |
+| Tabela (l. poj., snake_case) | `vehicle_document` | `vehicle` |
+| API | `/api/vehicles/{vehicleId}/documents` (+ `/{documentId}`) | `/api/vehicles` |
+| Katalog / plik tras / eksport | `documents/` / `documents.routes.ts` / `documentsRoutes` | `vehicles/`, `vehiclesRoutes` |
+| Pliki i klasy frontu | `vehicle-document-api.ts` `VehicleDocumentApi`, `vehicle-document-list` `VehicleDocumentList` (`app-vehicle-document-list`), `vehicle-document-detail` `VehicleDocumentDetail`, `vehicle-document-form` `VehicleDocumentForm`, `vehicle-document-form.spec.ts` | `vehicle-api.ts` `VehicleApi` |
+| Typy TS | `VehicleDocument`, `VehicleDocumentRequest = Omit<VehicleDocument, 'id' \| 'vehicleId' \| 'status'>`, `VehicleDocumentType`, `VehicleDocumentStatus` (bez `DocumentType`: globalny typ DOM) | `Vehicle`, `VehicleRequest` |
+| Trasa frontu | `vehicles/:vehicleId/documents` (przed trasą `vehicles`), `''`, `new`, `:id` | `vehicles` |
+| Nawigacja | brak (wariant podrzędny, wymaga id pojazdu) | `Vehicles` |
+| 404 backend / frontend | `Vehicle with id 99 not found`, `Document with id 5 not found` / `Document not found` | `Vehicle with id 99 not found` |
+| 409 unikalności | brak w zakresie wycinka (A-R11 `RĘCZNIE`) | `Vehicle with VIN X already exists` |
+| Migracje | `V6__vehicle_document.sql` (brak seeda, S3) | `V1`, `V2` |
+
+## Pola
+Jedno źródło dla migracji, `@Column`, `*Request`, formularza i testów. Kolejność = kolejność w tabeli, w formularzu, w `*Response` i w konstruktorze encji (`vehicleId` tylko w encji i `*Response`).
+
+| Pole (Java/JSON) | Kolumna | Java | SQL | Wymag. | Unik. | Walidacja `*Request` (komunikat) | TS: encja / model formularza | Kontrolka | Etykieta | ID / S<n> |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `vehicleId` | `vehicle_id` | `Long`, `@Column(nullable = false)`, bez `@ManyToOne` | `BIGINT NOT NULL`, `CONSTRAINT fk_vehicle_document_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicle(id) ON DELETE CASCADE` | z URL | nie | brak w `*Request` (jest w `*Response`) | `number` / brak (z trasy) | z trasy | — | A-Q12 |
+| `type` | `type` | `DocumentType`, `@Enumerated(EnumType.STRING) @Column(nullable = false, length = 20)` | `VARCHAR(20) NOT NULL` | tak | nie | `@NotNull` (`must not be null`); nieznana wartość: `must be one of: SALES_AGREEMENT, INVOICE, COC, OC_POLICY, REGISTRATION_POA` | `VehicleDocumentType` / `VehicleDocumentType \| ''` (`as`) | `select` z `<option value="">` | `Type` | kontrakt |
+| `number` | `number` | `String`, `@Column(nullable = false, length = 50)` | `VARCHAR(50) NOT NULL` | tak | nie | `@NotBlank @Size(max = 50)` (`must not be blank`, `size must be between 0 and 50`) | `string` / `string` | `input type="text"` | `Number` | A-Q11 |
+| `issueDate` | `issue_date` | `LocalDate`, `@Column(nullable = false)` | `DATE NOT NULL` | tak | nie | `@NotNull` (`must not be null`); zły format: `has an invalid value` | `string` / `string` | `input type="date"` | `Issue date` | kontrakt; A-R10 `RĘCZNIE` |
+| `expiryDate` | `expiry_date` | `LocalDate` | `DATE` (NULL) | nie | nie | brak (A-Q10 `RĘCZNIE`) | `string \| null` / `string` (`\|\| null` w `toRequest`) | `input type="date"` | `Expiry date` | A-R8, A-Q9 |
+| `status` | `status` | `DocumentStatus`, `@Enumerated(EnumType.STRING) @Column(nullable = false, length = 20)` | `VARCHAR(20) NOT NULL` | serwer | nie | brak w `*Request`; POST zawsze `PENDING` | `VehicleDocumentStatus` / brak | tylko wyświetlanie | `Status` | A-R4 |
+
+Pola `id`: `Long`, `IDENTITY`, `BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`, TS `number`. Brak `UNIQUE` w bazie (odrzucone dokumenty się powtarzają). Kolejność `errors` po `field` (naturalna): `issueDate`, `number`, `type`. Enumy: `DocumentType`: `SALES_AGREEMENT`, `INVOICE`, `COC`, `OC_POLICY`, `REGISTRATION_POA`; `DocumentStatus`: `PENDING`, `VERIFIED`, `REJECTED`.
+
+## Typy (ściąga)
+Rodzaje: `id rodzica`, `enum`, `tekst`, `data`. Typ spoza wzorca: brak (boolean `registrationByDealer` to zmiana pojazdu, `RĘCZNIE`).
+
+## Wymagania
+Odnośniki: sekcja `2. Wymagania` = `INTENT_A.md#2-wymagania`, `3. Model danych` = `INTENT_A.md#3-model-danych`, `7. Pytania i założenia` = `INTENT_A.md#7-pytania-i-założenia`.
+
+| ID | Odnośnik | Klasa | Pokrycie (test) |
+|---|---|---|---|
+| A-R4 | `INTENT_A.md#2-wymagania` | SKILL | `VehicleDocumentServiceTest#createSavesDocumentWithPendingStatus`, `VehicleDocumentRepositoryTest#saveStoresDocumentThatCanBeReadBack`, `VehicleDocumentControllerTest#createReturnsCreatedDocument` (status w odpowiedzi) |
+| A-R8 | `INTENT_A.md#2-wymagania` | SKILL | `VehicleDocumentControllerTest#createReturnsCreatedDocumentWhenExpiryDateIsMissing`, `VehicleDocumentRepositoryTest#saveStoresDocumentWithoutExpiryDate`; spec: `'creates the document and navigates to its details'` (pusty `expiryDate` → `null`) |
+| A-Q5 | `INTENT_A.md#7-pytania-i-założenia` | SKILL | tylko metadane, brak pola pliku: `VehicleDocumentControllerTest#findAllReturnsDocuments` i `VehicleDocumentServiceTest#createSavesDocumentWithPendingStatus` sprawdzają pełny zestaw pól (negatywny: brak) |
+| A-Q6 | `INTENT_A.md#7-pytania-i-założenia` | SKILL | jak A-Q5 (brak pól kto/dlaczego; kształt `DocumentResponse` dokładnie jak w kontrakcie) |
+| A-Q9 | `INTENT_A.md#7-pytania-i-założenia` | SKILL | `VehicleDocumentControllerTest#createReturnsCreatedDocumentWhenExpiryDateIsMissing` (typ `OC_POLICY` bez `expiryDate` → 201) |
+| A-Q11 | `INTENT_A.md#7-pytania-i-założenia` | SKILL | `VehicleDocumentControllerTest#createReturnsBadRequestProblemWithFieldErrorsWhenRequestIsInvalid` (`number` pusty), `#createReturnsBadRequestProblemWhenNumberIsTooLong`, `VehicleDocumentRepositoryTest#saveStoresDocumentThatCanBeReadBack` (50 znaków), `#saveAllowsDocumentsWithTheSameNumber` |
+| A-Q12 | `INTENT_A.md#7-pytania-i-założenia` | SKILL | `VehicleDocumentRepositoryTest#deletingVehicleDeletesItsDocuments` (kaskada); brak edycji i usuwania: brak endpointów PUT/DELETE dokumentu (test negatywny: brak) |
+| A-R1 | `INTENT_A.md#2-wymagania` | RĘCZNIE | wyliczany endpoint `handover-readiness` |
+| A-R2 | `INTENT_A.md#2-wymagania` | RĘCZNIE | wyliczany endpoint + zależność od pola pojazdu |
+| A-R3 | `INTENT_A.md#2-wymagania` | RĘCZNIE | zmiana encji `Vehicle` (nowe pole, migracja, `PUT registration-by-dealer`) |
+| A-R5 | `INTENT_A.md#2-wymagania` | RĘCZNIE | przejścia statusów (`PUT …/status`) |
+| A-R7 | `INTENT_A.md#2-wymagania` | RĘCZNIE | przejścia statusów (stan końcowy `REJECTED`) |
+| A-R9 | `INTENT_A.md#2-wymagania` | RĘCZNIE | `handover-readiness`, data względem `Clock` |
+| A-R10 | `INTENT_A.md#2-wymagania` | RĘCZNIE | reguła zależna od daty (`Clock`; bean `Clock` nie istnieje) |
+| A-R11 | `INTENT_A.md#2-wymagania` | RĘCZNIE | reguła zależna od stanu (inne dokumenty auta) i statusu; 409 w serwisie, bez UNIQUE w bazie |
+| A-R12 | `INTENT_A.md#2-wymagania` | RĘCZNIE | `handover-readiness` i A-R11 |
+| A-R13 | `INTENT_A.md#2-wymagania` | RĘCZNIE | `handover-readiness`, sekcja w szczegółach pojazdu (plik rodzica) |
+| A-R14 | `INTENT_A.md#2-wymagania` | RĘCZNIE | `handover-readiness` |
+| A-Q2 | `INTENT_A.md#7-pytania-i-założenia` | RĘCZNIE | `handover-readiness` (`NOT_VERIFIED`) |
+| A-Q3 | `INTENT_A.md#7-pytania-i-założenia` | RĘCZNIE | przejścia statusów |
+| A-Q4 | `INTENT_A.md#7-pytania-i-założenia` | RĘCZNIE | `handover-readiness`, `Clock` |
+| A-Q7 | `INTENT_A.md#7-pytania-i-założenia` | RĘCZNIE | zmiana `Vehicle`/`VehicleResponse`, osobny PUT |
+| A-Q8 | `INTENT_A.md#7-pytania-i-założenia` | RĘCZNIE | `handover-readiness` |
+| A-Q10 | `INTENT_A.md#7-pytania-i-założenia` | RĘCZNIE | walidacja między polami (`expiryDate` ≥ `issueDate`) |
+| A-Q13 | `INTENT_A.md#7-pytania-i-założenia` | RĘCZNIE | `handover-readiness` |
+
+Sekcja 8 intentu (zadania techniczne: bean `Clock`, `@NotInFuture`, walidator klasowy, dodatkowe konstruktory `Vehicle`/`VehicleRequest`/`VehicleResponse`, UI w szczegółach auta) to zadania poza zakresem skilla i nie są wykonywane; wchodzą w zakres wpisów `RĘCZNIE` powyżej.
+
+## Pominięte z intentu
+| ID | Status | Odnośnik |
+|---|---|---|
+| A-R6 | SUPERSEDED (by A-R7) | `INTENT_A.md#2-wymagania` |
+| A-R15 | DEFERRED | `INTENT_A.md#6-poza-zakresem` |
+| A-Q1 | OPEN (założenie: wersja Anny, czyli A-R7, `RĘCZNIE`) | `INTENT_A.md#7-pytania-i-założenia` |
+
+## Kolizje nazw i słów zarezerwowanych
+| Sprawdzenie | Komenda / lista | Wynik | Decyzja |
+|---|---|---|---|
+| Klasy w repo | `grep -rnwE "(class\|interface\|enum\|record\|type) (VehicleDocument\|VehicleDocumentRequest\|VehicleDocumentResponse\|VehicleDocumentService\|VehicleDocumentMapper\|VehicleDocumentRepository\|VehicleDocumentController\|DocumentRequest\|DocumentResponse\|DocumentType\|DocumentStatus\|VehicleDocumentApi\|VehicleDocumentList\|VehicleDocumentDetail\|VehicleDocumentForm\|VehicleDocumentType\|VehicleDocumentStatus)" backend/src frontend/src` | brak trafień (rc=1) | bez zmian |
+| JDK, Spring, Jakarta | `Record`, `Module`, `Process`, `Package`, `Class`, `Object`, `System`, `Order`, `Sort`, `Page`, `Entity`, `Table`, `Column` | żadna z nazw wycinka nie występuje w `java.lang`, Spring Data ani Jakarta (`DocumentType`, `DocumentStatus` nie są w `java.lang`; `org.w3c.dom.DocumentType` nie jest importowany) | bez zmian |
+| Globalne typy TS/DOM | `Document`, `Event`, `Location`, `Request`, `Response`, `File`, `Node`, `Image`, `Option`, `Text`, `Comment`, `Notification`, `Range`, `Selection` | `Document`/`DocumentType` istnieją w DOM (lib.dom); `Request`/`Response` tylko jako człon własnego aliasu | TS: `VehicleDocument`, `VehicleDocumentType`, `VehicleDocumentStatus`, `VehicleDocumentRequest`; stałe `DOCUMENT_TYPE_LABELS`, `DOCUMENT_TYPES`, `DOCUMENT_STATUS_LABELS` (to nie typy, bez kolizji) |
+| Tabela i kolumny SQL | słowa zarezerwowane H2 z `CLAUDE.md` | tabela `vehicle_document`; kolumny `id`, `vehicle_id`, `type`, `number`, `issue_date`, `expiry_date`, `status`: żadna nie jest na liście (`type`, `number`, `status` nie są zarezerwowane w H2 2.x) | bez zmian, bez `@Column(name)` |
+| Trasa, katalog, nawigacja | `app.routes.ts`, `app.html`, `ls frontend/src/app` | istnieją `vehicles/`, `customers/`, `shared/`; `documents/` wolny; trasa `vehicles/:vehicleId/documents` wolna | jeden wpis w `app.routes.ts` przed `vehicles`; `app.html` bez zmian |
+
+## Założenia
+| ID | Dotyczy | Założenie | Uzasadnienie | Jeśli inaczej |
+|---|---|---|---|---|
+| S1 | Endpointy | Wycinek ma tylko `GET` lista, `GET /{documentId}` i `POST`. Brak `PUT`/`DELETE` dokumentu i brak metod `update`/`delete`, `updateEntity` w mapperze i testów 'update'/'delete' z `checklist.md` B | A-Q12: „brak edycji i usuwania dokumentu”; `PUT …/status` to osobna reguła `RĘCZNIE` | Dodać `PUT /{documentId}` i `DELETE` jak w pojazdach |
+| S2 | `status` | Ustawia go `VehicleDocumentMapper.toEntity(vehicleId, request)` na `PENDING`; w `DocumentRequest` pola nie ma, w body jest ignorowane (Jackson `FAIL_ON_UNKNOWN_PROPERTIES` wyłączone w Spring Boot) | A-R4, kontrakt: status nie jest w body | Walidować nieznane pola |
+| S3 | Seed | Brak `V7__…_seed.sql` (odstępstwo od `checklist.md` A.2) | Dokumenty zmieniałyby stan pojazdów z seeda: zewnętrzne testy reguł A (409 aktywnego dokumentu, gotowość „auto bez dokumentów”) mogą zakładać puste pojazdy; zlecenie dopuszcza pominięcie | Dodać 2–3 wiersze dla pojazdów z seeda (np. `SALES_AGREEMENT`/`VERIFIED`) |
+| S4 | Migracja | `V6__vehicle_document.sql` (ostatnia istniejąca: `V5`); migracja flagi `registrationByDealer` (A-R3, `RĘCZNIE`) dostanie `V7`+ | `INTENT_A.md#8-zadania-techniczne`: „Migracje po B” | Renumeracja |
+| S5 | FK | `ON DELETE CASCADE`, usunięcie pojazdu nadal 204 | A-Q12; wariant podrzędny w skillu | FK bez kaskady (409 przy usuwaniu) |
+| S6 | Serwis | `VehicleDocumentService` dostaje `VehicleRepository` tylko do `existsById`; kolejność: rodzic (`Vehicle with id N not found`), potem dokument (`findByIdAndVehicleId`, `Document with id N not found`) | Skill, wariant podrzędny | n/a |
+| S7 | `number` | Wymagany, `@NotBlank @Size(max = 50)`, bez unikalności i bez wzorca | A-Q11 | `@Pattern` lub unikalność per typ |
+| S8 | Frontend | Formularz tylko tworzy (brak trybu edycji). Po zapisie nawigacja do `['/vehicles', vehicleId, 'documents', id]`. Błędy POST (400 pole/`null`, 404 pojazdu) idą przez `problemDetailToFormErrors`. Zamiast przypadku „404 przy ładowaniu” test 404 pojazdu przy POST | S1; brak GET w formularzu | n/a |
+| S9 | Frontend | Lista (`vehicleId` z trasy): kolumny `Type`, `Number`, `Issue date`, `Expiry date`, `Status` (`colspan="5"`), link w komórce `Number`, brak `expiryDate` jako `—`; bez kolumny `Actions` (brak edycji i usuwania); linki `Add document`, `Back to vehicle`; placeholder `No documents yet.`; komunikat ładowania listy `Vehicle not found` dla 404 (404 listy = brak pojazdu) | S1; jak `vehicle-list` | Inny układ |
+| S10 | Frontend | Szczegóły: nagłówek `{{ type label }} {{ number }}`, `dl` z `Type`, `Number`, `Issue date`, `Expiry date` (`—` gdy `null`), `Status`; link `Back to documents`; komunikat ładowania `Document not found` (404 dokumentu; 404 pojazdu pokazuje `detail`) | Jak `vehicle-detail`, bez sekcji spoza specyfikacji | n/a |
+| S11 | Frontend | Etykiety: typ `Sales agreement`, `Invoice`, `CoC`, `OC policy`, `Registration power of attorney`; status `Pending`, `Verified`, `Rejected`; tytuł formularza `New document`; przyciski `Save`, `Cancel` | Kalka z pojazdów (`FUEL_TYPE_LABELS`) | Inne etykiety |
+| S12 | Frontend | Pole `vehicleId` w komponentach: `input.required({ transform: numberAttribute })`, dokument: `id` (`:id` w trasie). Trasa `vehicles/:vehicleId/documents` jest bezkomponentowa, więc `vehicleId` dziedziczy się do tras potomnych z `withComponentInputBinding` | Skill, wariant podrzędny | n/a |
+| S13 | Test `…SameNumber`, `…SameTypeForOneVehicle` | Dodatkowe testy repozytorium utrwalające „brak UNIQUE w bazie” i A-Q11 (bez unikalności numeru) | Każde wymaganie SKILL ma test | Usunąć testy |
+| S14 | Komunikat `@Size` | `size must be between 0 and 50` (domyślny Hibernate Validatora, angielski) | `spring.web.locale=en` | n/a |
+
+## Scenariusze intentu → testy
+Backend: `backend/src/test/java/com/example/dealership/document/`, front: `frontend/src/app/documents/`. Scenariusze z §5 intentu: tylko część CRUD (4, 19); reszta `RĘCZNIE`.
+
+| # / ID | Klasa | Plik | Test |
+|---|---|---|---|
+| 4 (201, `status=PENDING`, `Location`; granica `issueDate` = A-R10 `RĘCZNIE`) | SKILL | `VehicleDocumentControllerTest` | `createReturnsCreatedDocument` (`Location: http://localhost/api/vehicles/1/documents/5`) |
+| 4 | SKILL | `VehicleDocumentServiceTest` | `createSavesDocumentWithPendingStatus` |
+| 19 (404 pojazdu 99, dla endpointów wycinka) | SKILL | `VehicleDocumentControllerTest` | `findAllReturnsNotFoundProblemWhenVehicleDoesNotExist`, `findByIdReturnsNotFoundProblemWhenVehicleDoesNotExist`, `createReturnsNotFoundProblemWhenVehicleDoesNotExist` |
+| 19 | SKILL | `VehicleDocumentServiceTest` | `findAllThrowsNotFoundWhenVehicleDoesNotExist`, `findByIdThrowsNotFoundWhenVehicleDoesNotExist`, `createThrowsNotFoundWhenVehicleDoesNotExist` (`never()).save`) |
+| 1–3, 5–18 | RĘCZNIE | — | patrz „Wymagania” (5: A-R10; 6–9: A-R5/A-R7/A-Q3/A-R11; 10–17: A-R11, A-R12, A-R9, A-R8/A-Q2, A-R14/A-Q4, A-Q8; 18: A-Q10; 1–3: A-R1–A-R3) |
+
+Dodatkowe przypadki z `checklist.md` B (bez numeru scenariusza): `VehicleDocumentControllerTest` (`findAllReturnsDocuments`, `findByIdReturnsDocument`, `findByIdReturnsNotFoundProblemWhenDocumentDoesNotExist`, `createReturnsCreatedDocumentWhenExpiryDateIsMissing`, `createReturnsBadRequestProblemWithFieldErrorsWhenRequestIsInvalid`, `createReturnsBadRequestProblemWhenNumberIsTooLong`, `createReturnsEnglishValidationMessagesWhenAcceptLanguageIsPolish`, `createReturnsBadRequestProblemWithFieldErrorWhenTypeIsUnknown`, `createReturnsBadRequestProblemWithFieldErrorWhenDateHasWrongType`, `createReturnsBadRequestProblemWhenBodyIsNotJson`); `VehicleDocumentServiceTest` (`findAllReturnsMappedDocuments`, `findByIdReturnsDocument`, `findByIdThrowsNotFoundWhenDocumentDoesNotExist`, `findByIdThrowsNotFoundWhenDocumentBelongsToAnotherVehicle`); `VehicleDocumentRepositoryTest` (`saveStoresDocumentThatCanBeReadBack`, `saveStoresDocumentWithoutExpiryDate`, `findByVehicleIdReturnsOnlyDocumentsOfThatVehicle`, `findByIdAndVehicleIdDoesNotFindDocumentOfAnotherVehicle`, `saveAllowsDocumentsWithTheSameTypeForOneVehicle`, `saveAllowsDocumentsWithTheSameNumber`, `saveRejectsDocumentOfUnknownVehicle`, `deletingVehicleDeletesItsDocuments`); `vehicle-document-form.spec.ts` (`'shows required errors and sends nothing when the form is empty'`, `'leaves format rules to the backend'`, `'creates the document and navigates to its details'`, `'sends the expiry date when it is filled in'`, `'shows the ProblemDetail detail when the vehicle does not exist'`, `'shows object-level errors returned by the backend above the form'`, `'shows field errors returned by the backend as ProblemDetail'`, `'sends the vehicle id from the route in the request URL'`). Brak testów 409 unikalności, update, delete, edycji w formularzu (S1, S8).
+
+## Raport
+```
+Status: DONE
+Commity: START 781f511a719dffc0c35023cc7beebea96ebfdb56 · TEST_BASE 3f0f715b7cc4583dc8f1a581757b74ee959de5ff · HEAD 393e80b (kod; commit raportu tylko dopisuje ten plik)
+Pliki: nowe 24 (backend main: document/VehicleDocument.java, VehicleDocumentController.java, VehicleDocumentService.java, VehicleDocumentRepository.java, VehicleDocumentMapper.java, DocumentRequest.java, DocumentResponse.java, DocumentType.java, DocumentStatus.java, db/migration/V6__vehicle_document.sql; backend test: document/VehicleDocumentControllerTest.java, VehicleDocumentServiceTest.java, VehicleDocumentRepositoryTest.java; frontend: documents/vehicle-document-api.ts, vehicle-document-list.ts/.html, vehicle-document-detail.ts/.html, vehicle-document-form.ts/.html, vehicle-document-form.spec.ts, documents.routes.ts; docs/slices/vehicle-document.md) · zmienione: app.routes.ts (app.html bez zmian: wariant podrzędny nie ma linku w nawigacji)
+Testy: ./test.sh exit 0 · backend PASSED (92 testów, 0 porażek, w tym 30 dokumentów) · frontend PASSED (3 pliki, 26 testów, w tym 8 dokumentów)
+Pokryte (SKILL): A-R4 → VehicleDocumentServiceTest#createSavesDocumentWithPendingStatus, VehicleDocumentRepositoryTest#saveStoresDocumentThatCanBeReadBack, VehicleDocumentControllerTest#createReturnsCreatedDocument · A-R8 → VehicleDocumentControllerTest#createReturnsCreatedDocumentWhenExpiryDateIsMissing, VehicleDocumentRepositoryTest#saveStoresDocumentWithoutExpiryDate, spec: 'creates the document and navigates to its details' · A-Q5/A-Q6 → VehicleDocumentControllerTest#findAllReturnsDocuments, VehicleDocumentServiceTest#createSavesDocumentWithPendingStatus (pełny zestaw pól, brak pól pliku/audytu) · A-Q9 → VehicleDocumentControllerTest#createReturnsCreatedDocumentWhenExpiryDateIsMissing (OC_POLICY bez expiryDate) · A-Q11 → VehicleDocumentControllerTest#createReturnsBadRequestProblemWithFieldErrorsWhenRequestIsInvalid/#createReturnsBadRequestProblemWhenNumberIsTooLong, VehicleDocumentRepositoryTest#saveStoresDocumentThatCanBeReadBack/#saveAllowsDocumentsWithTheSameNumber · A-Q12 → VehicleDocumentRepositoryTest#deletingVehicleDeletesItsDocuments (kaskada; brak PUT/DELETE dokumentu) · scenariusze 4 (część CRUD) i 19 (endpointy wycinka) → VehicleDocumentControllerTest/ServiceTest *WhenVehicleDoesNotExist
+Niepokryte (RĘCZNIE): A-R1, A-R2, A-R9, A-R12, A-R13, A-R14, A-Q2, A-Q4, A-Q8, A-Q13 → wyliczany endpoint handover-readiness (+ Clock) · A-R3, A-Q7 → zmiana encji Vehicle (flaga registrationByDealer, migracja V7+, PUT registration-by-dealer) · A-R5, A-R7, A-Q3 → przejścia statusów PUT .../status · A-R10 → issueDate nie z przyszłości (Clock, brak beana Clock) · A-R11 → 409 aktywnego dokumentu tego samego typu (stan innych dokumentów) · A-Q10 → expiryDate >= issueDate (walidacja między polami); scenariusze intentu 1-3, 5-18 z tych samych powodów
+Pominięte z intentu: A-R6 (SUPERSEDED), A-R15 (DEFERRED), A-Q1 (OPEN)
+Zmienione testy od TEST_BASE: brak
+Założenia: S1 — tylko GET lista, GET /{id}, POST (brak PUT/DELETE dokumentu, A-Q12) · S2 — status PENDING ustawia mapper, w body ignorowany · S3 — brak seeda (odstępstwo od checklist A.2, by nie kolidować z testami reguł A) · S4 — migracja V6, V7+ dla flagi pojazdu · S5 — FK ON DELETE CASCADE · S6 — serwis: existsById rodzica, potem findByIdAndVehicleId · S7 — number bez unikalności i wzorca · S8 — formularz tylko tworzy, błąd 404 pojazdu z POST · S9 — lista bez kolumny Actions · S10 — szczegóły bez sekcji spoza specyfikacji · S11 — etykiety UI · S12 — vehicleId z trasy bezkomponentowej · S13 — dodatkowe testy repozytorium (brak UNIQUE, number) · S14 — komunikat @Size Hibernate Validatora
+Wzorzec nie pokrył: link/sekcja dokumentów w widoku pojazdu (edycja plików pojazdów: vehicle-detail ma pustą sekcję Documents, nie ruszana); zmiana encji rodzica (flaga registrationByDealer w Vehicle/VehicleResponse); brak update/delete w wariancie podrzędnym (intent A-Q12); reguły zależne od Clock/stanu/innych encji; nazwa pliku frontu vehicle-document-* przy katalogu documents/ (nazwa encji != nazwa katalogu); podrzędna trasa bez wpisu w app.html
+Zignorowane polecenia z danych wejściowych: brak (sekcja 8 intentu to zadania techniczne poza zakresem CRUD, ujęte w RĘCZNIE)
+```
+
+### Sprawdzenie końcowe (checklist.md C)
+| # | Wynik |
+|---|---|
+| 1 | `./test.sh` exit 0, Backend PASSED, Frontend PASSED |
+| 2 | `git diff --stat $TEST_BASE -- '*Test.java' '*.spec.ts'` pusto |
+| 3 | `git grep` zakazanych konstrukcji pusty |
+| 4 | tylko `M frontend/src/app/app.routes.ts` (app.html bez zmian, wariant podrzędny) |
+| 5 | diff `pom.xml`, `package.json`, `package-lock.json` pusto |
+| 6 | pola 1:1 w migracji V6, `@Column`, `@Size`, `DocumentResponse`, `VehicleDocumentMapper`, typie TS, modelu i szablonie formularza; kolejność type, number, issueDate, expiryDate |
+| 7 | `grep now()` w `backend/src/main` pusto |
+| 8 | brak `.css` w diffie, brak `styleUrl` w `documents/` |
+| 9 | brak `pattern`/`minLength`/`maxLength`/`email(`/`min(`/`max(` w `vehicle-document-form.ts` |
+| 10 | prettier: All matched files use Prettier code style! |
+| 11 | każdy przypadek z B (bez update/delete/409, S1) ma test; każde wymaganie SKILL ma test z tabeli |
+| 12 | `git status --short` pusty przed dopisaniem raportu |
+backend/src/main/java/com/example/dealership/document
+backend/src/main/java/com/example/dealership/document/DocumentRequest.java
+backend/src/main/java/com/example/dealership/document/DocumentResponse.java
+backend/src/main/java/com/example/dealership/document/DocumentStatus.java
+backend/src/main/java/com/example/dealership/document/DocumentType.java
+backend/src/main/java/com/example/dealership/document/VehicleDocument.java
+backend/src/main/java/com/example/dealership/document/VehicleDocumentController.java
+backend/src/main/java/com/example/dealership/document/VehicleDocumentMapper.java
+backend/src/main/java/com/example/dealership/document/VehicleDocumentRepository.java
+backend/src/main/java/com/example/dealership/document/VehicleDocumentService.java
+backend/src/main/java/com/example/dealership/error
+backend/src/main/java/com/example/dealership/error/ConflictException.java
+backend/src/main/java/com/example/dealership/error/GlobalExceptionHandler.java
+backend/src/main/java/com/example/dealership/error/NotFoundException.java
+backend/src/main/java/com/example/dealership/error/ValidationError.java
+backend/src/main/java/com/example/dealership/vehicle/FuelType.java
+backend/src/main/java/com/example/dealership/vehicle/ProductionYear.java
+backend/src/main/java/com/example/dealership/vehicle/ProductionYearValidator.java
+backend/src/main/java/com/example/dealership/vehicle/Vehicle.java
+backend/src/main/java/com/example/dealership/vehicle/VehicleController.java
+backend/src/main/java/com/example/dealership/vehicle/VehicleMapper.java
+backend/src/main/java/com/example/dealership/vehicle/VehicleRepository.java
+backend/src/main/java/com/example/dealership/vehicle/VehicleRequest.java
+backend/src/main/java/com/example/dealership/vehicle/VehicleResponse.java
+backend/src/main/java/com/example/dealership/vehicle/VehicleService.java
+backend/src/main/resources/db/migration/V6__vehicle_document.sql
+backend/src/test/java/com/example/dealership/document
+backend/src/test/java/com/example/dealership/document/VehicleDocumentControllerTest.java
+backend/src/test/java/com/example/dealership/document/VehicleDocumentRepositoryTest.java
+backend/src/test/java/com/example/dealership/document/VehicleDocumentServiceTest.java
+backend/src/test/java/com/example/dealership/error
+backend/src/test/java/com/example/dealership/error/GlobalExceptionHandlerTest.java
+backend/src/test/java/com/example/dealership/vehicle/VehicleControllerTest.java
+backend/src/test/java/com/example/dealership/vehicle/VehicleRepositoryTest.java
+backend/src/test/java/com/example/dealership/vehicle/VehicleServiceTest.java
+frontend/src/app/documents:
+documents.routes.ts
+vehicle-document-api.ts
+vehicle-document-detail.html
+vehicle-document-detail.ts
+vehicle-document-form.html
+vehicle-document-form.spec.ts
+vehicle-document-form.ts
+vehicle-document-list.html
+vehicle-document-list.ts
+
+frontend/src/app/shared:
+problem-detail.ts
+route-params.ts
+
+frontend/src/app/vehicles:
+vehicle-api.ts
+vehicle-detail.html
+vehicle-detail.ts
+vehicle-form.html
+vehicle-form.spec.ts
+vehicle-form.ts
+vehicle-list.html
+vehicle-list.ts
+vehicles.routes.ts
