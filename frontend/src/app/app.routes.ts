@@ -3,6 +3,10 @@ import { Routes } from '@angular/router';
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'vehicles' },
   {
+    path: 'vehicles/:vehicleId/documents',
+    loadChildren: () => import('./documents/documents.routes').then((m) => m.documentsRoutes),
+  },
+  {
     path: 'vehicles',
     loadChildren: () => import('./vehicles/vehicles.routes').then((m) => m.vehiclesRoutes),
   },
