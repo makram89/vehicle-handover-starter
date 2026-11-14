@@ -1,0 +1,24 @@
+@let state = readiness();
+<p>
+  <strong>{{ state.ready ? 'Ready for handover' : 'Not ready for handover' }}</strong>
+</p>
+@if (state.missingDocumentTypes.length) {
+  <p>
+    Missing:
+    @for (type of state.missingDocumentTypes; track type; let last = $last) {
+      {{ documentTypeLabels[type] }}{{ last ? '' : ',' }}
+    }
+  </p>
+}
+@if (state.problems.length) {
+  <ul>
+    @for (problem of state.problems; track $index) {
+      <li>
+        @if (problem.documentType) {
+          {{ documentTypeLabels[problem.documentType] }}:
+        }
+        {{ readinessReasonLabels[problem.reason] }}
+      </li>
+    }
+  </ul>
+}

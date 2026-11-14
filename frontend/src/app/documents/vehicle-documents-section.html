@@ -1,0 +1,62 @@
+@if (readiness.error(); as error) {
+  <p class="error" role="alert">{{ loadError(error) }}</p>
+} @else if (readiness.value(); as value) {
+  <app-vehicle-handover-readiness [readiness]="value" />
+}
+<p>
+  <label>
+    <input
+      type="checkbox"
+      [checked]="registration.value()?.registrationByDealer ?? false"
+      (change)="setRegistrationByDealer($event)"
+    />
+    Registration by dealer
+  </label>
+</p>
+@if (actionError(); as message) {
+  <p class="error" role="alert">{{ message }}</p>
+}
+<p><a [routerLink]="['/vehicles', vehicleId(), 'documents', 'new']">Add document</a></p>
+@if (documents.error(); as error) {
+  <p class="error" role="alert">{{ loadError(error) }}</p>
+} @else {
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Number</th>
+        <th>Issue date</th>
+        <th>Expiry date</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (document of documents.value(); track document.id) {
+        <tr>
+          <td>{{ documentTypeLabels[document.type] }}</td>
+          <td>
+            <a [routerLink]="['/vehicles', vehicleId(), 'documents', document.id]">{{
+              document.number
+            }}</a>
+          </td>
+          <td>{{ document.issueDate }}</td>
+          <td>{{ document.expiryDate ?? '—' }}</td>
+          <td>{{ documentStatusLabels[document.status] }}</td>
+          <td>
+            @if (document.status === 'PENDING') {
+              <button type="button" (click)="changeStatus(document.id, 'VERIFIED')">Verify</button>
+            }
+            @if (document.status !== 'REJECTED') {
+              <button type="button" (click)="changeStatus(document.id, 'REJECTED')">Reject</button>
+            }
+          </td>
+        </tr>
+      } @empty {
+        <tr>
+          <td colspan="6">No documents yet.</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+}

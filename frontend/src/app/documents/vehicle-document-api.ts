@@ -35,6 +35,25 @@ export interface VehicleDocument {
 
 export type VehicleDocumentRequest = Omit<VehicleDocument, 'id' | 'vehicleId' | 'status'>;
 
+export type ReadinessReason = 'NOT_VERIFIED' | 'EXPIRED' | 'NO_HANDOVER_DATE';
+
+export const READINESS_REASON_LABELS: Record<ReadinessReason, string> = {
+  NOT_VERIFIED: 'Not verified',
+  EXPIRED: 'Expired',
+  NO_HANDOVER_DATE: 'No planned handover date',
+};
+
+export interface ReadinessProblem {
+  documentType: VehicleDocumentType | null;
+  reason: ReadinessReason;
+}
+
+export interface HandoverReadiness {
+  ready: boolean;
+  missingDocumentTypes: VehicleDocumentType[];
+  problems: ReadinessProblem[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class VehicleDocumentApi {
   private readonly http = inject(HttpClient);
@@ -56,5 +75,27 @@ export class VehicleDocumentApi {
 
   create(vehicleId: number, request: VehicleDocumentRequest): Observable<VehicleDocument> {
     return this.http.post<VehicleDocument>(this.url(vehicleId), request);
+  }
+
+  readiness(vehicleId: Signal<number>) {
+    return httpResource<HandoverReadiness>(() => `/api/vehicles/${vehicleId()}/handover-readiness`);
+  }
+
+  registration(vehicleId: Signal<number>) {
+    return httpResource<{ registrationByDealer: boolean }>(() => `/api/vehicles/${vehicleId()}`);
+  }
+
+  changeStatus(
+    vehicleId: number,
+    id: number,
+    status: VehicleDocumentStatus,
+  ): Observable<VehicleDocument> {
+    return this.http.put<VehicleDocument>(`${this.url(vehicleId)}/${id}/status`, { status });
+  }
+
+  setRegistrationByDealer(vehicleId: number, registrationByDealer: boolean): Observable<unknown> {
+    return this.http.put(`/api/vehicles/${vehicleId}/registration-by-dealer`, {
+      registrationByDealer,
+    });
   }
 }
